@@ -1,18 +1,30 @@
 #!/usr/bin/env node
-// IBR cli — entry point
+// IBR cli — v2.0 entry point
 
-import { loadConfig, saveConfig, configPath, addModel, removeModel, switchModel } from "./config/store.js"
+import { loadConfig, saveConfig, configPath, addModel, removeModel, switchModel, login, setField } from "./config/store.js"
 import { COLOR, printBanner } from "./ui/theme.js"
 import { isTTY, renderNotice } from "./ui/render.js"
 import { startChat } from "./chat.js"
-import { openConfigEditor } from "./config-editor.js"
+
+const VERSION = "2.0.0"
 
 const USAGE = `
-${COLOR.brand("IBR cli")} ${COLOR.muted("v1.0.1")}
+${COLOR.brand("IBR cli")} ${COLOR.muted("v" + VERSION)}
 
-${COLOR.brand("Usage:")}
+${COLOR.brand("Quick start:")}
+  ibrcli login <api_url> <api_key> <model>     one-line setup (recommended)
+  ibrcli                                        start chatting
+  ibrcli doctor                                 test API connection
+
+${COLOR.brand("Example:")}
+  ibrcli login https://integrate.api.nvidia.com/v1 nvapi-xxx z-ai/glm-5.3
+  ibrcli
+
+${COLOR.brand("Commands:")}
   ibrcli                  start chat (interactive)
-  ibrcli chat            same as above
+  ibrcli chat             same as above
+  ibrcli login <url> <key> [model]   one-shot setup — sets api_url, api_key, switches/creates model preset
+  ibrcli set <field> <value>         set any config field (e.g. set api_key xxx, set gen.temperature 0.5)
   ibrcli config          interactive config editor
   ibrcli init            write default config to ~/.ibr/config.json
   ibrcli show            print current config as JSON
@@ -21,23 +33,24 @@ ${COLOR.brand("Usage:")}
   ibrcli add <id>        add a new model preset
   ibrcli rm <id>         remove a model preset
   ibrcli switch <id>     switch active model preset
-  ibrcli run "<prompt>"  one-shot prompt to completion (no chat)
+  ibrcli sessions        list saved sessions
+  ibrcli resume <id>     resume a saved session
+  ibrcli tools           list available tools
+  ibrcli doctor          test API connection
+  ibrcli run "<prompt>"   one-shot prompt to completion
   ibrcli --help | -h     this message
   ibrcli --version | -v  version
 
 ${COLOR.brand("Slash commands inside chat:")}
-  /help /quit /clear /config /models /switch /add /rm /cost /show
+  /help /quit /clear /config /models /switch /add /rm
+  /tools /sessions /resume /save /cost /cwd /cd /ls /doctor /show
 
 ${COLOR.brand("Config file:")}
   ~/.ibr/config.json  ${COLOR.muted("(set IBR_CONFIG_DIR to override)")}
 
 ${COLOR.brand("Env vars:")}
-  IBR_API_URL           override api_url
-  IBR_API_KEY           override api_key
-  IBR_API_PATH          override api_path
-  IBR_MODEL             override active model preset id
-  NO_COLOR              disable ANSI colors
-  FORCE_COLOR           force color level (0/1/2/3)
+  IBR_API_URL, IBR_API_KEY, IBR_API_PATH, IBR_MODEL
+  NO_COLOR, FORCE_COLOR
 `
 
 function applyEnvOverrides(cfg: ReturnType<typeof loadConfig>) {
@@ -62,7 +75,7 @@ async function main(): Promise<void> {
       process.exit(0)
     case "-v":
     case "--version":
-      process.stdout.write("ibrcli 1.0.1\n")
+      process.stdout.write(`ibrcli ${VERSION}\n`)
       process.exit(0)
     case "init":
       saveConfig(loadConfig())
@@ -71,21 +84,112 @@ async function main(): Promise<void> {
     case "path":
       process.stdout.write(configPath() + "\n")
       process.exit(0)
+    case "login": {
+      const url = argv[1]
+      const key = argv[2]
+      const model = argv[3]
+      if (!url || !key || !model) {
+        process.stderr.write(`usage: ibrcli login <api_url> <api_key> <model>\n`)
+        process.stderr.write(`example: ibrcli login https://integrate.api.nvidia.com/v1 nvapi-xxx z-ai/glm-5.3\n`)
+        process.exit(2)
+      }
+      const cfg = loadConfig()
+      const next = login(cfg, url, key, model)
+      saveConfig(next)
+      process.stdout.write(renderNotice(`logged in → ${url}`, "ok") + "\n")
+      process.stdout.write(renderNotice(`active model: ${next.active_model_id} (${model})`, "ok") + "\n")
+      process.stdout.write(COLOR.muted("  config saved to " + configPath()) + "\n")
+      process.stdout.write(COLOR.muted("  run `ibrcli` to start chatting\n"))
+      process.exit(0)
+    }
+    case "set": {
+      const field = argv[1]
+      const value = argv.slice(2).join(" ")
+      if (!field || !value) {
+        process.stderr.write(`usage: ibrcli set <field> <value>\n`)
+        process.stderr.write(`examples:\n`)
+        process.stderr.write(`  ibrcli set api_key nvapi-xxx\n`)
+        process.stderr.write(`  ibrcli set api_url https://integrate.api.nvidia.com/v1\n`)
+        process.stderr.write(`  ibrcli set gen.temperature 0.5\n`)
+        process.stderr.write(`  ibrcli set stream false\n`)
+        process.exit(2)
+      }
+      try {
+        const cfg = loadConfig()
+        const next = setField(cfg, field, value)
+        saveConfig(next)
+        process.stdout.write(renderNotice(`set ${field} = ${value}`, "ok") + "\n")
+        process.exit(0)
+      } catch (e) {
+        process.stderr.write(`error: ${(e as Error).message}\n`)
+        process.exit(1)
+      }
+    }
     case "show": {
       const cfg = applyEnvOverrides(loadConfig())
       process.stdout.write(JSON.stringify(cfg, null, 2) + "\n")
       process.exit(0)
     }
+    case "tools": {
+      const { TOOLS } = await import("./tools/index.js")
+      process.stdout.write(COLOR.brand("IBR cli tools") + COLOR.muted(" — model can call these") + "\n\n")
+      for (const t of TOOLS) {
+        const perm = t.requiresPermission ? "  [perm]" : ""
+        process.stdout.write(`  ${COLOR.brand(t.name.padEnd(14))} ${COLOR.muted(t.description.slice(0, 64))}${perm}\n`)
+      }
+      process.exit(0)
+    }
+    case "sessions": {
+      const { listSessions } = await import("./sessions/store.js")
+      const list = listSessions()
+      if (list.length === 0) {
+        process.stdout.write(renderNotice("no saved sessions", "info") + "\n")
+      } else {
+        for (const s of list) {
+          process.stdout.write(`  ${COLOR.brand(s.id.padEnd(28))}  ${new Date(s.ts).toISOString().slice(0, 19)}  ${s.model.padEnd(20)}  ${s.msgCount} msgs\n`)
+        }
+      }
+      process.exit(0)
+    }
+    case "resume": {
+      const id = argv[1]
+      if (!id) { process.stderr.write("usage: ibrcli resume <session-id>\n"); process.exit(2) }
+      process.argv.push("--resume", id)  // pass to chat loop
+      // fall through to chat
+    }
     case "config":
     case "cfg": {
       if (!isTTY()) {
-        process.stderr.write("ibrcli config needs an interactive terminal.\n")
+        process.stderr.write("ibrcli config needs an interactive terminal. Use `ibrcli set <field> <value>` instead.\n")
         process.exit(1)
       }
       const cfg = applyEnvOverrides(loadConfig())
-      await openConfigEditor(cfg)
+      const { openConfigEditor } = await import("./config-editor.js")
+      // create a shared readLine for the editor
+      const readline = await import("node:readline/promises")
+      const { stdin, stdout } = await import("node:process")
+      const readLine = (prompt: string) => new Promise<string | null>((resolve) => {
+        const rl = readline.createInterface({ input: stdin, output: stdout, prompt, terminal: isTTY() })
+        rl.prompt()
+        let done = false
+        const finish = (v: string | null) => {
+          if (done) return
+          done = true
+          rl.close()
+          resolve(v)
+        }
+        rl.on("line", (l) => finish(l))
+        rl.on("close", () => finish(null))
+        rl.on("SIGINT", () => finish(null))
+      })
+      await openConfigEditor(cfg, readLine)
       saveConfig(cfg)
       process.stdout.write(renderNotice("config saved to " + configPath(), "ok") + "\n")
+      process.exit(0)
+    }
+    case "doctor": {
+      const cfg = applyEnvOverrides(loadConfig())
+      await runDoctor(cfg)
       process.exit(0)
     }
     case "models":
@@ -128,19 +232,18 @@ async function main(): Promise<void> {
     }
     case "run": {
       const prompt = argv.slice(1).join(" ")
-      if (!prompt) { process.stderr.write("usage: ibrcli run \"your prompt\"\n"); process.exit(2) }
+      if (!prompt) { process.stderr.write('usage: ibrcli run "your prompt"\n'); process.exit(2) }
       const cfg = applyEnvOverrides(loadConfig())
       const model = cfg.models.find((m) => m.id === cfg.active_model_id) || cfg.models[0]
       const sys = model.system_prompt || cfg.system_prompt
-      const messages = [
-        { role: "system" as const, content: sys },
-        { role: "user" as const, content: prompt },
-      ]
       const { streamChat } = await import("./api/client.js")
       const { StreamingLine } = await import("./ui/render.js")
       const stream = new StreamingLine()
       await new Promise<void>((resolve) => {
-        streamChat(cfg, model, messages, {
+        streamChat(cfg, model, [
+          { role: "system", content: sys },
+          { role: "user", content: prompt },
+        ], null, {
           onDelta: (d) => stream.append(d),
           onDone: () => { stream.finish(); resolve() },
           onError: (e) => {
@@ -168,7 +271,7 @@ async function main(): Promise<void> {
           streamChat(cfg, model, [
             { role: "system", content: sys },
             { role: "user", content: text },
-          ], {
+          ], null, {
             onDelta: (d) => stream.append(d),
             onDone: () => { stream.finish(); resolve() },
             onError: (e) => { process.stderr.write("\nError: " + e.message + "\n"); resolve() },
@@ -176,12 +279,49 @@ async function main(): Promise<void> {
         })
         process.exit(0)
       }
-      printBanner()
       await startChat()
       process.exit(0)
     default:
       process.stderr.write(`ibrcli: unknown command "${cmd}"\n${USAGE}\n`)
       process.exit(2)
+  }
+}
+
+async function runDoctor(cfg: ReturnType<typeof loadConfig>): Promise<void> {
+  const m = cfg.models.find((x) => x.id === cfg.active_model_id) || cfg.models[0]
+  process.stdout.write(COLOR.brand("ibrcli doctor") + COLOR.muted(` — testing ${cfg.api_url}`) + "\n")
+  process.stdout.write(COLOR.muted("  model:    " + m.model + "\n"))
+  process.stdout.write(COLOR.muted("  api_key:  " + (cfg.api_key ? cfg.api_key.slice(0, 6) + "…" + cfg.api_key.slice(-4) : "(empty — set with `ibrcli login <url> <key> <model>` or `ibrcli set api_key <key>`)") + "\n"))
+  process.stdout.write(COLOR.muted("  headers:  " + (cfg.headers.length ? cfg.headers.map((h) => h.key).join(", ") : "(none)") + "\n"))
+  process.stdout.write("\n")
+  const { Spinner } = await import("./ui/render.js")
+  const spinner = new Spinner("sending probe")
+  spinner.start()
+  const t0 = Date.now()
+  try {
+    const { streamChat } = await import("./api/client.js")
+    await new Promise<void>((resolve) => {
+      streamChat(cfg, m, [
+        { role: "system", content: "Reply with exactly: OK" },
+        { role: "user", content: "ping" },
+      ], null, {
+        onDelta: () => {},
+        onDone: (full) => {
+          spinner.stop()
+          const ms = Date.now() - t0
+          process.stdout.write(renderNotice(`OK in ${ms}ms — reply: "${full.slice(0, 80)}"`, "ok") + "\n")
+          resolve()
+        },
+        onError: (e) => {
+          spinner.stop()
+          process.stdout.write(renderNotice(`FAIL: ${e.message.slice(0, 200)}`, "err") + "\n")
+          resolve()
+        },
+      })
+    })
+  } catch (e) {
+    spinner.stop()
+    process.stdout.write(renderNotice(`FAIL: ${(e as Error).message}`, "err") + "\n")
   }
 }
 

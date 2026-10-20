@@ -76,3 +76,73 @@ export function removeModel(c: Config, id: string): Config {
   const active_model_id = c.active_model_id === id ? models[0].id : c.active_model_id
   return { ...c, models, active_model_id }
 }
+
+/**
+ * One-shot setup: set api_url + api_key, and either switch to or create a
+ * model preset that sends the given `model` id to the API.
+ *
+ * Example: ibrcli login https://integrate.api.nvidia.com/v1 nvapi-xxx z-ai/glm-5.3
+ */
+export function login(c: Config, url: string, key: string, model: string): Config {
+  // find a preset with this model id (or matching id), else create one
+  let presetId: string
+  const existing = c.models.find((m) => m.model === model || m.id === model)
+  if (existing) {
+    presetId = existing.id
+    existing.model = model
+  } else {
+    // use the model id as the preset id, but sanitize
+    presetId = model.replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 32) || "user"
+    if (c.models.find((m) => m.id === presetId)) {
+      // already exists with same id but different model id — just update
+      const m = c.models.find((x) => x.id === presetId)!
+      m.model = model
+    } else {
+      c.models = [
+        ...c.models,
+        {
+          id: presetId,
+          model,
+          context_window: c.context_window,
+          system_prompt: "",
+          gen: { ...c.gen },
+        },
+      ]
+    }
+  }
+  return {
+    ...c,
+    api_url: url,
+    api_key: key,
+    active_model_id: presetId,
+  }
+}
+
+/**
+ * Quick-set a top-level field by dotted path (e.g. "api_key", "gen.temperature").
+ */
+export function setField(c: Config, path: string, value: string): Config {
+  const next: Config = JSON.parse(JSON.stringify(c))
+  const parts = path.split(".")
+  let target: any = next
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (target[parts[i]] == null || typeof target[parts[i]] !== "object") {
+      throw new Error(`path not found: ${path}`)
+    }
+    target = target[parts[i]]
+  }
+  const leaf = parts[parts.length - 1]
+  if (!(leaf in target) && parts.length > 1) {
+    throw new Error(`unknown field: ${path}`)
+  }
+  // type-coerce: number → Number, "true"/"false" → boolean
+  let v: any = value
+  if (value === "null") v = null
+  else if (value === "true") v = true
+  else if (value === "false") v = false
+  else if (/^-?\d+(\.\d+)?$/.test(value) && parts[0] !== "api_key" && parts[0] !== "api_url") {
+    v = Number(value)
+  }
+  target[leaf] = v
+  return next
+}

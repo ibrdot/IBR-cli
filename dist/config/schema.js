@@ -10,23 +10,26 @@ export const DEFAULT_GEN = {
     presence_penalty: 0,
 };
 export const DEFAULT_CONFIG = {
-    api_url: "https://api.openai.com/v1",
+    api_url: "https://integrate.api.nvidia.com/v1",
     api_key: "",
     api_path: "/chat/completions",
-    system_prompt: "You are IBR, a helpful assistant running inside the user's terminal. Be concise and accurate.",
+    system_prompt: "You are IBR, a helpful AI coding assistant running in the user's terminal. " +
+        "You can call tools to read/write files, run shell commands, search code, and fetch URLs. " +
+        "Be concise. When you take an action, briefly say what you did. " +
+        "Use markdown formatting (headings, lists, code blocks) for readability.",
     context_window: 128000,
     gen: { ...DEFAULT_GEN },
     headers: [],
     models: [
         {
-            id: "default",
-            model: "gpt-4o-mini",
+            id: "glm",
+            model: "z-ai/glm-5.3",
             context_window: 128000,
             system_prompt: "",
             gen: { ...DEFAULT_GEN },
         },
     ],
-    active_model_id: "default",
+    active_model_id: "glm",
     request_timeout_ms: 120000,
     stream: true,
     theme: "midnight",

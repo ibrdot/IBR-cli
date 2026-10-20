@@ -1,17 +1,30 @@
-// IBR cli — OpenAI-compatible streaming chat client
-// Talks to whatever API the user pointed at. No vendor lock-in.
+// IBR cli — OpenAI-compatible streaming chat client (v2: tool calling support)
 
 import type { Config, ModelPreset } from "../config/schema.js"
 
+export interface ToolCall {
+  id: string
+  type: "function"
+  function: { name: string; arguments: string }
+}
+
 export interface ChatMessage {
-  role: "system" | "user" | "assistant"
+  role: "system" | "user" | "assistant" | "tool"
   content: string
+  tool_calls?: ToolCall[]
+  tool_call_id?: string
+  name?: string
 }
 
 export interface StreamCallbacks {
   onDelta: (text: string) => void
   onDone: (full: string) => void
   onError: (err: Error) => void
+}
+
+export interface StreamResult {
+  text: string
+  toolCalls: ToolCall[]
 }
 
 function buildHeaders(c: Config): Record<string, string> {
@@ -28,7 +41,7 @@ function buildHeaders(c: Config): Record<string, string> {
   return h
 }
 
-function buildBody(c: Config, m: ModelPreset, messages: ChatMessage[]) {
+function buildBody(c: Config, m: ModelPreset, messages: ChatMessage[], tools: any[] | null) {
   const body: Record<string, unknown> = {
     model: m.model,
     messages,
@@ -40,6 +53,10 @@ function buildBody(c: Config, m: ModelPreset, messages: ChatMessage[]) {
   }
   if (m.gen.max_tokens != null && m.gen.max_tokens > 0) {
     body.max_tokens = m.gen.max_tokens
+  }
+  if (tools && tools.length > 0) {
+    body.tools = tools
+    body.tool_choice = "auto"
   }
   return body
 }
@@ -56,12 +73,13 @@ export async function streamChat(
   c: Config,
   m: ModelPreset,
   messages: ChatMessage[],
+  tools: any[] | null,
   cb: StreamCallbacks,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<StreamResult> {
   const url = endpoint(c)
   const headers = buildHeaders(c)
-  const body = buildBody(c, m, messages)
+  const body = buildBody(c, m, messages, tools)
 
   let resp: Response
   try {
@@ -72,42 +90,45 @@ export async function streamChat(
       signal,
     })
   } catch (err) {
-    cb.onError(new Error(`Network error contacting ${url}: ${err instanceof Error ? err.message : String(err)}`))
-    return
+    const msg = err instanceof Error ? err.message : String(err)
+    cb.onError(new Error(`network error contacting ${url}: ${msg}`))
+    return { text: "", toolCalls: [] }
   }
 
   if (!resp.ok) {
     let detail = ""
     try {
       const t = await resp.text()
-      detail = t.slice(0, 600)
-    } catch {
-      /* ignore */
-    }
+      detail = t.slice(0, 800)
+    } catch {}
     cb.onError(new Error(`HTTP ${resp.status} ${resp.statusText} from ${url}${detail ? "\n" + detail : ""}`))
-    return
+    return { text: "", toolCalls: [] }
   }
 
-  // Non-streaming fallback
+  // non-streaming response
   if (!c.stream || !resp.body) {
     let json: any
     try {
       json = await resp.json()
     } catch (err) {
-      cb.onError(new Error(`Bad JSON response: ${err instanceof Error ? err.message : String(err)}`))
-      return
+      cb.onError(new Error(`bad JSON response: ${err instanceof Error ? err.message : String(err)}`))
+      return { text: "", toolCalls: [] }
     }
-    const txt = extractContent(json)
-    cb.onDelta(txt)
-    cb.onDone(txt)
-    return
+    const msg = json?.choices?.[0]?.message || json
+    const text = msg?.content || ""
+    const toolCalls: ToolCall[] = normalizeToolCalls(msg?.tool_calls)
+    if (text) cb.onDelta(text)
+    cb.onDone(text)
+    return { text, toolCalls }
   }
 
-  // SSE parser
+  // SSE parser with tool_calls accumulation
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()
   let buf = ""
   let full = ""
+  // tool_calls accumulated across deltas (OpenAI sends them piece by piece)
+  const toolCallAcc: Map<number, { id: string; name: string; arguments: string }> = new Map()
 
   try {
     while (true) {
@@ -123,15 +144,27 @@ export async function streamChat(
           if (!t.startsWith("data:")) continue
           const payload = t.slice(5).trim()
           if (payload === "[DONE]") {
+            const toolCalls = finalizeToolCalls(toolCallAcc)
             cb.onDone(full)
-            return
+            return { text: full, toolCalls }
           }
           try {
             const ev = JSON.parse(payload)
-            const delta = extractDelta(ev)
-            if (delta) {
-              full += delta
-              cb.onDelta(delta)
+            const delta = ev?.choices?.[0]?.delta
+            if (!delta) continue
+            if (typeof delta.content === "string" && delta.content.length > 0) {
+              full += delta.content
+              cb.onDelta(delta.content)
+            }
+            if (Array.isArray(delta.tool_calls)) {
+              for (const tc of delta.tool_calls) {
+                const i = typeof tc.index === "number" ? tc.index : 0
+                const entry = toolCallAcc.get(i) || { id: "", name: "", arguments: "" }
+                if (tc.id) entry.id = entry.id || tc.id
+                if (tc.function?.name) entry.name += tc.function.name
+                if (tc.function?.arguments) entry.arguments += tc.function.arguments
+                toolCallAcc.set(i, entry)
+              }
             }
           } catch {
             /* skip malformed line */
@@ -139,29 +172,40 @@ export async function streamChat(
         }
       }
     }
+    const toolCalls = finalizeToolCalls(toolCallAcc)
     cb.onDone(full)
+    return { text: full, toolCalls }
   } catch (err) {
-    cb.onError(new Error(`Stream interrupted: ${err instanceof Error ? err.message : String(err)}`))
+    cb.onError(new Error(`stream interrupted: ${err instanceof Error ? err.message : String(err)}`))
+    return { text: full, toolCalls: finalizeToolCalls(toolCallAcc) }
   }
 }
 
-function extractDelta(ev: any): string {
-  // OpenAI / OpenRouter / most compatibles
-  const choices = ev?.choices
-  if (Array.isArray(choices) && choices.length) {
-    const ch0 = choices[0]
-    const d = ch0?.delta?.content ?? ch0?.message?.content
-    if (typeof d === "string") return d
+function finalizeToolCalls(acc: Map<number, { id: string; name: string; arguments: string }>): ToolCall[] {
+  const out: ToolCall[] = []
+  const sorted = Array.from(acc.entries()).sort((a, b) => a[0] - b[0])
+  for (const [, v] of sorted) {
+    if (!v.name) continue
+    out.push({
+      id: v.id || `call_${Math.random().toString(36).slice(2, 10)}`,
+      type: "function",
+      function: { name: v.name, arguments: v.arguments || "{}" },
+    })
   }
-  // Some servers send { content: "..." }
-  if (typeof ev?.content === "string") return ev.content
-  // Mistral-style
-  const out = ev?.choices?.[0]?.delta?.content
-  if (typeof out === "string") return out
-  return ""
+  return out
 }
 
-function extractContent(json: any): string {
-  const ch = json?.choices?.[0]
-  return ch?.message?.content ?? ch?.text ?? ""
+function normalizeToolCalls(raw: unknown): ToolCall[] {
+  if (!Array.isArray(raw)) return []
+  const out: ToolCall[] = []
+  for (const r of raw as any[]) {
+    if (r?.function?.name) {
+      out.push({
+        id: r.id || `call_${Math.random().toString(36).slice(2, 10)}`,
+        type: "function",
+        function: { name: r.function.name, arguments: r.function.arguments || "{}" },
+      })
+    }
+  }
+  return out
 }

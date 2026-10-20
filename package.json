@@ -1,7 +1,7 @@
 {
   "name": "ibr-cli",
-  "version": "1.0.1",
-  "description": "IBR cli — minimal AI chat for any OpenAI-compatible API. Works on Termux, Linux, macOS, Windows.",
+  "version": "2.0.0",
+  "description": "IBR cli — minimal AI chat for any OpenAI-compatible API. Tools, sessions, slash commands. Works on Termux, Linux, macOS, Windows.",
   "type": "module",
   "bin": {
     "ibrcli": "dist/index.js"
