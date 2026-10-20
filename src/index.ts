@@ -8,7 +8,7 @@ import { startChat } from "./chat.js"
 import { openConfigEditor } from "./config-editor.js"
 
 const USAGE = `
-${COLOR.brand("IBR cli")} ${COLOR.muted("v1.0")}
+${COLOR.brand("IBR cli")} ${COLOR.muted("v1.0.1")}
 
 ${COLOR.brand("Usage:")}
   ibrcli                  start chat (interactive)
@@ -62,7 +62,7 @@ async function main(): Promise<void> {
       process.exit(0)
     case "-v":
     case "--version":
-      process.stdout.write("ibrcli 1.0.0\n")
+      process.stdout.write("ibrcli 1.0.1\n")
       process.exit(0)
     case "init":
       saveConfig(loadConfig())
