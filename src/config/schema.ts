@@ -49,6 +49,11 @@ export interface Config {
   stream: boolean
   // UI theme: "dark" | "light" | "midnight" | "solar"
   theme: string
+  // BYPASS ALL PERMISSIONS — dangerous. When true, every tool (including
+  // write_file, edit_file, run_bash) runs without asking. Equivalent to
+  // Claude Code's --dangerously-skip-permissions. Only enable in trusted
+  // sandboxes; never in production or on machines with sensitive data.
+  bypass_permissions: boolean
 }
 
 export const DEFAULT_GEN: GenParams = {
@@ -87,6 +92,7 @@ export const DEFAULT_CONFIG: Config = {
   request_timeout_ms: 120000,
   stream: true,
   theme: "midnight",
+  bypass_permissions: false,
 }
 
 export function validateConfig(c: unknown): Config {

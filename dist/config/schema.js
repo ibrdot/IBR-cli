@@ -36,6 +36,7 @@ export const DEFAULT_CONFIG = {
     request_timeout_ms: 120000,
     stream: true,
     theme: "midnight",
+    bypass_permissions: false,
 };
 export function validateConfig(c) {
     if (typeof c !== "object" || c === null) {

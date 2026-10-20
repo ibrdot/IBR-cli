@@ -2,7 +2,7 @@
 
 import * as readline from "node:readline/promises"
 import { stdin, stdout } from "node:process"
-import { activeModel, loadConfig, saveConfig, switchModel, addModel, removeModel, sanitizeUrl, isConfigured } from "./config/store.js"
+import { activeModel, loadConfig, saveConfig, switchModel, addModel, removeModel, sanitizeUrl, isConfigured, maskApiKey } from "./config/store.js"
 import type { Config } from "./config/schema.js"
 import { streamChat, type ChatMessage, type ToolCall } from "./api/client.js"
 import { buildOutgoing } from "./context/window.js"
@@ -40,6 +40,12 @@ export async function startChat(): Promise<void> {
   }
 
   printBanner()
+
+  if (cfg.bypass_permissions) {
+    process.stdout.write(COLOR.err("  !  BYPASS PERMISSIONS IS ON  -  every tool (write/edit/bash) will auto-execute without asking  "))
+    process.stdout.write("\n")
+    process.stdout.write(COLOR.muted("     turn off: ibrcli set bypass_permissions false   |   /yolo off\n\n"))
+  }
   printHelp()
   printStatus(cfg)
 
@@ -150,27 +156,35 @@ function readLine(prompt: string): Promise<string | null> {
 
 function printHelp(): void {
   const cmds: [string, string][] = [
-    ["/help",        "show commands"],
-    ["/config",      "interactive config editor"],
-    ["/models",      "list model presets"],
-    ["/switch <id>", "switch active model preset"],
-    ["/add <id>",    "add a new model preset"],
-    ["/rm <id>",     "remove a model preset"],
-    ["/tools",       "list available tools"],
-    ["/sessions",    "list saved sessions"],
-    ["/resume <id>", "resume a saved session"],
-    ["/save",        "save current session"],
-    ["/cost",        "estimated token usage so far"],
-    ["/clear",       "clear conversation history"],
-    ["/cwd",         "show working directory"],
-    ["/cd <dir>",    "change working directory"],
-    ["/ls",          "list files in cwd"],
-    ["/doctor",      "test API connection"],
-    ["/quit",        "exit"],
+    ["/help",          "show commands"],
+    ["/config",        "interactive config editor"],
+    ["/models",        "list model presets"],
+    ["/switch <id>",   "switch active model preset"],
+    ["/add <id>",      "add a new model preset"],
+    ["/rm <id>",       "remove a model preset"],
+    ["/tools",         "list available tools"],
+    ["/permissions",   "show tool permission policy"],
+    ["/yolo [on|off]", "toggle bypass-all-permissions mode (dangerous)"],
+    ["/sessions",      "list saved sessions"],
+    ["/resume <id>",   "resume a saved session"],
+    ["/save",          "save current session"],
+    ["/status",        "agent/model/context status"],
+    ["/cost",          "estimated token usage so far"],
+    ["/compact",       "compress history (offline heuristic)"],
+    ["/undo",          "drop last user+assistant pair"],
+    ["/diff",          "git diff --stat in cwd"],
+    ["/export [path]", "save transcript as markdown"],
+    ["/cwd",           "show working directory"],
+    ["/cd <dir>",      "change working directory"],
+    ["/ls",            "list files in cwd"],
+    ["/doctor",        "test API connection"],
+    ["/show",          "print current config as JSON"],
+    ["/clear",         "clear conversation history"],
+    ["/quit",          "exit"],
   ]
   process.stdout.write(COLOR.brand("commands") + "\n")
   for (const [cmd, desc] of cmds) {
-    process.stdout.write("  " + COLOR.brand(cmd.padEnd(18)) + COLOR.muted(desc) + "\n")
+    process.stdout.write("  " + COLOR.brand(cmd.padEnd(20)) + COLOR.muted(desc) + "\n")
   }
   process.stdout.write(COLOR.muted("  (start a message with ``` for multi-line — end with a blank line)") + "\n")
   process.stdout.write(COLOR.muted("  (Ctrl+C cancels a streaming response)") + "\n\n")
@@ -178,10 +192,16 @@ function printHelp(): void {
 
 function printStatus(cfg: Config, usedTokens = 0, budget = 0): void {
   const m = activeModel(cfg)
-  const left = `${COLOR.brand("IBR")} ${COLOR.muted("·")} ${COLOR.brand(m.id)} ${COLOR.muted("(" + (m.model || "(unset)") + ")")}`
-  const right = usedTokens > 0 ? `${usedTokens}/${budget} tokens` : sanitizeUrl(cfg.api_url)
+  const modelName = m.model || "(unset)"
+  const left = `${COLOR.brand("IBR")} ${COLOR.muted("·")} ${COLOR.brand(modelName)}`
+  const right = usedTokens > 0
+    ? `${usedTokens}/${budget} tokens`
+    : (state_memory.cwd_short || "")
   process.stdout.write(statusBar(left, right) + "\n")
 }
+
+// tiny module-scope scratch so printStatus can show cwd without plumbing
+const state_memory = { cwd_short: "" }
 
 async function handleUserText(state: ChatState, text: string): Promise<void> {
   const model = activeModel(state.cfg)
@@ -228,9 +248,10 @@ async function handleUserText(state: ChatState, text: string): Promise<void> {
         },
         onDone: (full) => {
           spinner.stop()
-          const text = stream.finish().length > 0 ? full : full
-          process.stdout.write("\n")
-          resolve({ text, toolCalls: [] })
+          // Real-time typing is already shown above (each delta was written
+          // as it arrived). We just finalize the line and resolve.
+          stream.finish()
+          resolve({ text: full, toolCalls: [] })
         },
         onError: (err) => {
           spinner.stop()
@@ -280,12 +301,13 @@ async function handleUserText(state: ChatState, text: string): Promise<void> {
         }
         const args = safeParseArgs(tc.function.arguments)
         const summary = formatToolSummary(tool.name, args)
-        process.stdout.write("  " + COLOR.brand(BOX.arrow) + " " + COLOR.user(tool.name) + " " + COLOR.muted(summary) + "\n")
 
-        // permission
-        if (tool.requiresPermission) {
-          const ok = await askPermission(tool.name, summary)
-          if (!ok) {
+        // permission gate for destructive tools
+        let allowed = true
+        if (tool.requiresPermission && !state.cfg.bypass_permissions) {
+          process.stdout.write("  " + COLOR.warn("?") + " " + COLOR.brand(tool.name) + " " + COLOR.muted(summary) + "\n")
+          allowed = await askPermission(tool.name, summary)
+          if (!allowed) {
             process.stdout.write(renderNotice(`denied — skipping ${tool.name}`, "warn") + "\n")
             toolMessages.push({
               role: "tool",
@@ -295,19 +317,30 @@ async function handleUserText(state: ChatState, text: string): Promise<void> {
             })
             continue
           }
+        } else if (tool.requiresPermission && state.cfg.bypass_permissions) {
+          // bypass mode — show that we're auto-approving
+          process.stdout.write("  " + COLOR.warn("!") + " " + COLOR.brand(tool.name) + " " + COLOR.muted(summary + "  [auto-approved]") + "\n")
         }
 
-        // execute
+        // run with a per-tool spinner so the user sees progress
+        const toolSpinner = new Spinner(`${tool.name} ${summary}`)
+        toolSpinner.start()
+        const t0 = Date.now()
         const ctx: ToolContext = {
           cwd: state.cwd,
           todo: state.todo,
           askPermission: async (n, s) => askPermission(n, s),
         }
         const res = await tool.run(args, ctx)
+        toolSpinner.stop()
+        const ms = Date.now() - t0
+
+        // render result with status icon
+        const icon = res.ok ? COLOR.ok("\u2713") : COLOR.err("\u2717")
+        const statusLabel = res.display ? res.display : (res.ok ? "ok" : "failed")
+        process.stdout.write("  " + icon + " " + COLOR.brand(tool.name) + " " + COLOR.muted(statusLabel + " (" + ms + "ms)") + "\n")
         if (res.diff) {
           printDiff(res.diff)
-        } else if (res.display) {
-          process.stdout.write(COLOR.muted("  " + (res.ok ? BOX.check : BOX.cross) + " " + res.display) + "\n")
         }
         toolMessages.push({
           role: "tool",
@@ -481,6 +514,61 @@ async function runSlashCommand(input: string, state: ChatState): Promise<void> {
       await runDoctor(state.cfg)
       return
     }
+    case "status": {
+      printAgentStatus(state)
+      return
+    }
+    case "compact": case "summarize": {
+      await compactHistory(state)
+      return
+    }
+    case "diff": {
+      await runGitDiff(state)
+      return
+    }
+    case "export": {
+      await exportTranscript(state, arg)
+      return
+    }
+    case "undo": {
+      // pop last user+assistant pair
+      if (state.history.length < 2) {
+        process.stdout.write(renderNotice("nothing to undo", "info") + "\n")
+        return
+      }
+      // pop assistant (last) and the matching user
+      state.history.pop()
+      state.history.pop()
+      process.stdout.write(renderNotice("undid last turn", "ok") + "\n")
+      return
+    }
+    case "permissions": case "perms": {
+      process.stdout.write(COLOR.brand("Permissions") + "\n")
+      const mode = state.cfg.bypass_permissions ? COLOR.err("BYPASS ON") : COLOR.ok("ask-each-time")
+      process.stdout.write("  mode: " + mode + "\n\n")
+      for (const t of TOOLS) {
+        const perm = t.requiresPermission ? COLOR.warn("ask   ") : COLOR.ok("auto  ")
+        process.stdout.write(`  ${perm} ${COLOR.brand(t.name.padEnd(14))} ${COLOR.muted(t.description.slice(0, 60))}\n`)
+      }
+      return
+    }
+    case "yolo": {
+      const target = arg.toLowerCase().trim()
+      if (target === "on" || target === "true" || target === "1") {
+        state.cfg.bypass_permissions = true
+        saveConfig(state.cfg)
+        process.stdout.write(COLOR.err("  !  BYPASS PERMISSIONS ON  —  destructive tools will auto-execute") + "\n")
+      } else if (target === "off" || target === "false" || target === "0") {
+        state.cfg.bypass_permissions = false
+        saveConfig(state.cfg)
+        process.stdout.write(COLOR.ok("  ✓  bypass permissions OFF  —  destructive tools will ask") + "\n")
+      } else {
+        // toggle or query
+        const current = state.cfg.bypass_permissions
+        process.stdout.write(renderNotice(`bypass_permissions = ${current}  (use /yolo on or /yolo off)`, "info") + "\n")
+      }
+      return
+    }
     case "show": {
       process.stdout.write(JSON.stringify(state.cfg, null, 2) + "\n")
       return
@@ -488,6 +576,69 @@ async function runSlashCommand(input: string, state: ChatState): Promise<void> {
     default:
       process.stdout.write(renderNotice(`unknown command: /${cmd} — try /help`, "warn") + "\n")
   }
+}
+
+function printAgentStatus(state: ChatState): void {
+  const m = activeModel(state.cfg)
+  const usedTokens = state.history.reduce((a, m2) => a + Math.ceil(m2.content.length / 4), 0)
+  process.stdout.write(COLOR.brand("IBR cli status") + "\n")
+  process.stdout.write(COLOR.muted("  cwd:           ") + state.cwd + "\n")
+  process.stdout.write(COLOR.muted("  project:        ") + (state.projectHint || "(none detected)") + "\n")
+  process.stdout.write(COLOR.muted("  active model:  ") + (m.model || "(unset)") + "  (preset: " + m.id + ")\n")
+  process.stdout.write(COLOR.muted("  api_url:       ") + sanitizeUrl(state.cfg.api_url) + "\n")
+  process.stdout.write(COLOR.muted("  api_key:       ") + maskApiKey(state.cfg.api_key) + "\n")
+  process.stdout.write(COLOR.muted("  messages:      ") + state.history.length + " in history\n")
+  process.stdout.write(COLOR.muted("  est. tokens:  ") + usedTokens + " (in-conversation, not billed)\n")
+  process.stdout.write(COLOR.muted("  context win:   ") + (m.context_window || state.cfg.context_window) + " tokens\n")
+  process.stdout.write(COLOR.muted("  todo items:    ") + state.todo.length + "\n")
+  if (state.todo.length > 0) {
+    for (const t of state.todo) {
+      const [status, ...rest] = t.split("::")
+      process.stdout.write("    " + COLOR.brand(status.padEnd(12)) + rest.join("::") + "\n")
+    }
+  }
+  process.stdout.write(COLOR.muted("  session id:    ") + state.sessionId + "\n")
+}
+
+async function compactHistory(state: ChatState): Promise<void> {
+  if (state.history.length < 4) {
+    process.stdout.write(renderNotice("not enough history to compact (need ≥4 messages)", "info") + "\n")
+    return
+  }
+  // simple compaction: keep system + last 2 turns, summarize the middle
+  // (real compaction would call the model — we keep it offline for now)
+  const before = state.history.length
+  const kept = state.history.slice(-4)
+  state.history = kept
+  process.stdout.write(renderNotice(`compacted ${before - kept.length} messages (offline heuristic — kept last 4)`, "ok") + "\n")
+  process.stdout.write(COLOR.muted("  (full summarization via model is a future improvement)\n") + "\n")
+}
+
+async function runGitDiff(state: ChatState): Promise<void> {
+  // run `git diff` in cwd via the run_bash tool
+  const { run_bash } = await import("./tools/run_bash.js")
+  process.stdout.write(COLOR.brand("git diff (working tree)") + "\n")
+  const res = await run_bash.run({ command: "git diff --stat" }, { cwd: state.cwd, todo: state.todo, askPermission: async () => true })
+  if (!res.ok) {
+    process.stdout.write(renderNotice("git not available or not a git repo: " + res.output.slice(0, 200), "warn") + "\n")
+    return
+  }
+  process.stdout.write(res.output + "\n")
+}
+
+async function exportTranscript(state: ChatState, dest: string): Promise<void> {
+  // export current session as markdown
+  const { writeFileSync } = await import("node:fs")
+  const { resolve } = await import("node:path")
+  const target = dest ? resolve(state.cwd, dest) : resolve(state.cwd, `ibrcli-transcript-${state.sessionId}.md`)
+  const lines: string[] = [`# IBR cli transcript`, ``, `**Session:** ${state.sessionId}`, `**Date:** ${new Date().toISOString()}`, `**Model:** ${activeModel(state.cfg).model}`, ``, `---`, ``]
+  for (const m of state.history) {
+    if (m.role === "user") lines.push(`## You`, ``, m.content, ``)
+    else if (m.role === "assistant") lines.push(`## IBR`, ``, m.content, ``)
+    else if (m.role === "tool") lines.push(`<details><summary>tool: ${m.name}</summary>`, ``, "```", m.content.slice(0, 800), "```", `</details>`, ``)
+  }
+  writeFileSync(target, lines.join("\n"), "utf8")
+  process.stdout.write(renderNotice(`transcript exported to ${target}`, "ok") + "\n")
 }
 
 function renderModelList(cfg: Config): string {

@@ -59,6 +59,7 @@ export class Spinner {
   private timer: NodeJS.Timeout | null = null
   private label: string
   private frames: string[]
+  private lastLen = 0
 
   constructor(label: string) {
     this.label = label
@@ -66,12 +67,15 @@ export class Spinner {
   }
 
   start(): void {
-    if (!isTTY()) return // can't animate without a TTY
+    if (!isTTY()) return
     this.stop()
     const tick = () => {
       const f = this.frames[this.idx % this.frames.length]
       this.idx++
-      process.stdout.write("\r" + COLOR.brand(f) + " " + COLOR.muted(this.label) + "   \b\b\b")
+      const line = COLOR.brand(f) + " " + COLOR.muted(this.label)
+      // pad with spaces to clear any longer previous label, then \r back to start
+      this.lastLen = stringWidth(line)
+      process.stdout.write("\r" + line)
     }
     tick()
     this.timer = setInterval(tick, 80)
@@ -84,7 +88,10 @@ export class Spinner {
     }
     // only write the clear sequence in TTY mode — in pipes the spaces would
     // show up as literal output
-    if (clear && isTTY()) process.stdout.write("\r" + " ".repeat(60) + "\r")
+    if (clear && isTTY() && this.lastLen > 0) {
+      process.stdout.write("\r" + " ".repeat(this.lastLen + 2) + "\r")
+      this.lastLen = 0
+    }
   }
 
   update(label: string): void {
@@ -92,29 +99,30 @@ export class Spinner {
   }
 }
 
-// Streaming renderer — overwrites the last line on each delta. Falls back to
-// plain append on non-TTY (so logs/captures still look fine).
+// Streaming renderer — writes each delta as it arrives (real-time typing
+// feel, like ChatGPT). Word-wraps at terminal width. Does NOT overwrite
+// or clear previously printed text. Falls back to plain append on non-TTY.
 export class StreamingLine {
   private buf = ""
-  private wrote = 0
 
   append(delta: string): void {
+    if (!delta) return
     this.buf += delta
     if (isTTY()) {
-      const w = termWidth()
-      const tail = this.buf.slice(-w)
-      const line = cliTruncate(tail, w)
-      const pad = Math.max(0, this.wrote - stringWidth(line))
-      process.stdout.write("\r" + COLOR.assistant(line) + " ".repeat(pad))
-      this.wrote = stringWidth(line)
+      // Real-time typing: just write each delta as it arrives. Word-wrap
+      // is handled by the terminal as long as we write the raw text.
+      // We do not \r, do not pad, do not truncate.
+      process.stdout.write(COLOR.assistant(delta))
     } else {
+      // pipes/logs — also write raw (no color)
       process.stdout.write(delta)
     }
   }
 
   finish(): string {
-    if (this.wrote > 0) process.stdout.write("\n")
-    else if (!isTTY() && this.buf.length === 0) process.stdout.write("\n")
+    // just terminate with a newline so the prompt starts fresh
+    if (this.buf.length > 0) process.stdout.write("\n")
+    else process.stdout.write("\n")
     return this.buf
   }
 }

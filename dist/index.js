@@ -5,7 +5,7 @@ import { loadConfig, saveConfig, configPath, addModel, removeModel, switchModel,
 import { COLOR, printBanner } from "./ui/theme.js";
 import { isTTY, renderNotice } from "./ui/render.js";
 import { startChat } from "./chat.js";
-const VERSION = "2.1.0";
+const VERSION = "2.2.0";
 const USAGE = `
 ${COLOR.brand("IBR cli")} ${COLOR.muted("v" + VERSION)}
 
@@ -96,7 +96,19 @@ async function readLine(prompt) {
 }
 async function main() {
     const argv = process.argv.slice(2);
-    const cmd = argv[0] || "chat";
+    // global flags that apply to any command
+    const yoloFlags = ["--yolo", "--yes-all", "--yes-all", "--dangerously-skip-permissions", "-y"];
+    const yoloRequested = argv.some((a) => yoloFlags.includes(a));
+    // strip yolo flags from argv
+    const filteredArgv = argv.filter((a) => !yoloFlags.includes(a));
+    if (yoloRequested) {
+        const cfg = loadConfig();
+        cfg.bypass_permissions = true;
+        saveConfig(cfg);
+        process.stdout.write(COLOR.err("  !  --yolo: BYPASS PERMISSIONS enabled for this and future runs") + "\n");
+        process.stdout.write(COLOR.muted("     turn off: ibrcli set bypass_permissions false  (or  /yolo off in chat)") + "\n\n");
+    }
+    const cmd = filteredArgv[0] || "chat";
     switch (cmd) {
         case "-h":
         case "--help":
@@ -122,9 +134,9 @@ async function main() {
             process.stdout.write(configPath() + "\n");
             process.exit(0);
         case "login": {
-            const url = argv[1];
-            const key = argv[2];
-            const model = argv[3];
+            const url = filteredArgv[1];
+            const key = filteredArgv[2];
+            const model = filteredArgv[3];
             if (!url || !key) {
                 process.stderr.write(`usage: ibrcli login <api_url> <api_key> [model]\n`);
                 process.stderr.write(`examples:\n`);
@@ -168,7 +180,7 @@ async function main() {
             process.exit(0);
         }
         case "set": {
-            const field = argv[1];
+            const field = filteredArgv[1];
             const value = argv.slice(2).join(" ");
             if (!field || !value) {
                 process.stderr.write(`usage: ibrcli set <field> <value>\n`);
@@ -243,7 +255,7 @@ async function main() {
             process.exit(0);
         }
         case "resume": {
-            const id = argv[1];
+            const id = filteredArgv[1];
             if (!id) {
                 process.stderr.write("usage: ibrcli resume <session-id>\n");
                 process.exit(2);
@@ -284,7 +296,7 @@ async function main() {
             process.exit(0);
         }
         case "add": {
-            const id = argv[1];
+            const id = filteredArgv[1];
             if (!id) {
                 process.stderr.write("usage: ibrcli add <id>\n");
                 process.exit(2);
@@ -297,7 +309,7 @@ async function main() {
         }
         case "rm":
         case "remove": {
-            const id = argv[1];
+            const id = filteredArgv[1];
             if (!id) {
                 process.stderr.write("usage: ibrcli rm <id>\n");
                 process.exit(2);
@@ -310,7 +322,7 @@ async function main() {
         }
         case "switch":
         case "model": {
-            const id = argv[1];
+            const id = filteredArgv[1];
             if (!id) {
                 process.stderr.write("usage: ibrcli switch <id>\n");
                 process.exit(2);

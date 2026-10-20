@@ -65,7 +65,7 @@ export const COLOR = {
 export const BANNER = String.raw`
    ___  ____ _____
   /_ / / __// ___/   IBR cli
-   / /_/ _ (__  )    v2.0
+   / /_/ _ (__  )    v2.2
   /___//___/____/     your AI, your tools, your API
 `
 
@@ -74,7 +74,7 @@ export function printBanner(): void {
   for (const line of lines) {
     process.stdout.write(COLOR.brand(line) + "\n")
   }
-  process.stdout.write(COLOR.muted("  chat with any OpenAI-compatible API  ·  tools: read/write/edit/grep/glob/bash/web/todo  ·  /help for commands\n"))
+  process.stdout.write(COLOR.muted("  chat with any OpenAI-compatible API  ·  markdown + tools + sessions  ·  /help for commands\n"))
   process.stdout.write("\n")
 }
 
