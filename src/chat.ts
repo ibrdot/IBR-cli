@@ -21,11 +21,11 @@ export async function startChat(): Promise<void> {
     cfg = loadConfig()
   } catch (e) {
     process.stdout.write(COLOR.err("Could not load config: " + (e as Error).message) + "\n")
-    process.stdout.write(COLOR.muted("Run `ibr config` to fix.") + "\n")
+    process.stdout.write(COLOR.muted("Run `ibrcli config` to fix.") + "\n")
     process.exit(1)
   }
   if (!cfg.api_key || cfg.api_key.length === 0) {
-    process.stdout.write(COLOR.warn("No API key set. Run `ibr config` to add one.") + "\n")
+    process.stdout.write(COLOR.warn("No API key set. Run `ibrcli config` to add one.") + "\n")
   }
 
   printBanner()
@@ -127,7 +127,7 @@ async function handleUserText(cfg: Config, text: string, history: ChatMessage[],
         spinner.stop()
         stream.finish()
         process.stdout.write("\n" + COLOR.err("Error: ") + err.message + "\n")
-        process.stdout.write(COLOR.muted("Run `ibr config` to check API URL/Key/Headers.") + "\n\n")
+        process.stdout.write(COLOR.muted("Run `ibrcli config` to check API URL/Key/Headers.") + "\n\n")
         resolve()
       },
     })

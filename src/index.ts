@@ -11,19 +11,19 @@ const USAGE = `
 ${COLOR.brand("IBR cli")} ${COLOR.muted("v1.0")}
 
 ${COLOR.brand("Usage:")}
-  ibr                    start chat (interactive)
-  ibr chat               same as above
-  ibr config             interactive config editor
-  ibr init               write default config to ~/.ibr/config.json
-  ibr show               print current config as JSON
-  ibr path               print config file path
-  ibr models             list model presets
-  ibr add <id>           add a new model preset
-  ibr rm <id>            remove a model preset
- ibr switch <id>         switch active model preset
-  ibr run "<prompt>"     one-shot prompt to completion (no chat)
-  ibr --help | -h        this message
-  ibr --version | -v     version
+  ibrcli                  start chat (interactive)
+  ibrcli chat            same as above
+  ibrcli config          interactive config editor
+  ibrcli init            write default config to ~/.ibr/config.json
+  ibrcli show            print current config as JSON
+  ibrcli path            print config file path
+  ibrcli models          list model presets
+  ibrcli add <id>        add a new model preset
+  ibrcli rm <id>         remove a model preset
+  ibrcli switch <id>     switch active model preset
+  ibrcli run "<prompt>"  one-shot prompt to completion (no chat)
+  ibrcli --help | -h     this message
+  ibrcli --version | -v  version
 
 ${COLOR.brand("Slash commands inside chat:")}
   /help /quit /clear /config /models /switch /add /rm /cost /show
@@ -62,7 +62,7 @@ async function main(): Promise<void> {
       process.exit(0)
     case "-v":
     case "--version":
-      process.stdout.write("ibr 1.0.0\n")
+      process.stdout.write("ibrcli 1.0.0\n")
       process.exit(0)
     case "init":
       saveConfig(loadConfig())
@@ -79,7 +79,7 @@ async function main(): Promise<void> {
     case "config":
     case "cfg": {
       if (!isTTY()) {
-        process.stderr.write("ibr config needs an interactive terminal.\n")
+        process.stderr.write("ibrcli config needs an interactive terminal.\n")
         process.exit(1)
       }
       const cfg = applyEnvOverrides(loadConfig())
@@ -99,7 +99,7 @@ async function main(): Promise<void> {
     }
     case "add": {
       const id = argv[1]
-      if (!id) { process.stderr.write("usage: ibr add <id>\n"); process.exit(2) }
+      if (!id) { process.stderr.write("usage: ibrcli add <id>\n"); process.exit(2) }
       const cfg = loadConfig()
       const next = addModel(cfg, id)
       saveConfig(next)
@@ -109,7 +109,7 @@ async function main(): Promise<void> {
     case "rm":
     case "remove": {
       const id = argv[1]
-      if (!id) { process.stderr.write("usage: ibr rm <id>\n"); process.exit(2) }
+      if (!id) { process.stderr.write("usage: ibrcli rm <id>\n"); process.exit(2) }
       const cfg = loadConfig()
       const next = removeModel(cfg, id)
       saveConfig(next)
@@ -119,7 +119,7 @@ async function main(): Promise<void> {
     case "switch":
     case "model": {
       const id = argv[1]
-      if (!id) { process.stderr.write("usage: ibr switch <id>\n"); process.exit(2) }
+      if (!id) { process.stderr.write("usage: ibrcli switch <id>\n"); process.exit(2) }
       const cfg = loadConfig()
       const next = switchModel(cfg, id)
       saveConfig(next)
@@ -128,7 +128,7 @@ async function main(): Promise<void> {
     }
     case "run": {
       const prompt = argv.slice(1).join(" ")
-      if (!prompt) { process.stderr.write("usage: ibr run \"your prompt\"\n"); process.exit(2) }
+      if (!prompt) { process.stderr.write("usage: ibrcli run \"your prompt\"\n"); process.exit(2) }
       const cfg = applyEnvOverrides(loadConfig())
       const model = cfg.models.find((m) => m.id === cfg.active_model_id) || cfg.models[0]
       const sys = model.system_prompt || cfg.system_prompt
@@ -157,7 +157,7 @@ async function main(): Promise<void> {
         const chunks: Buffer[] = []
         for await (const c of process.stdin) chunks.push(c as Buffer)
         const text = Buffer.concat(chunks).toString("utf8").trim()
-        if (!text) { process.stderr.write("ibr: stdin empty and not a TTY\n"); process.exit(1) }
+        if (!text) { process.stderr.write("ibrcli: stdin empty and not a TTY\n"); process.exit(1) }
         const cfg = applyEnvOverrides(loadConfig())
         const model = cfg.models.find((m) => m.id === cfg.active_model_id) || cfg.models[0]
         const sys = model.system_prompt || cfg.system_prompt
@@ -180,12 +180,12 @@ async function main(): Promise<void> {
       await startChat()
       process.exit(0)
     default:
-      process.stderr.write(`ibr: unknown command "${cmd}"\n${USAGE}\n`)
+      process.stderr.write(`ibrcli: unknown command "${cmd}"\n${USAGE}\n`)
       process.exit(2)
   }
 }
 
 main().catch((e) => {
-  process.stderr.write("ibr: " + (e as Error).message + "\n")
+  process.stderr.write("ibrcli: " + (e as Error).message + "\n")
   process.exit(1)
 })

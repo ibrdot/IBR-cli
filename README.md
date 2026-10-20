@@ -7,7 +7,7 @@ Works on Termux (Android), Linux, macOS, and Windows (cmd.exe / PowerShell / Win
 ## Install
 
 ```bash
-npm install -g ibr-cli
+npm install -g github:ibrdot/IBR-cli
 ```
 
 Requires Node 18+.
@@ -15,21 +15,21 @@ Requires Node 18+.
 ## Quick start
 
 ```bash
-ibr init              # writes ~/.ibr/config.json
-ibr config            # interactive editor — set API URL, key, model, etc.
-ibr                   # start chatting
+ibrcli init              # writes ~/.ibr/config.json
+ibrcli config            # interactive editor — set API URL, key, model, etc.
+ibrcli                   # start chatting
 ```
 
 Or one-shot:
 
 ```bash
-ibr run "explain this bash one-liner: ls -la | awk '{print \$9}'"
-echo "what is 2+2" | ibr chat
+ibrcli run "explain this bash one-liner: ls -la | awk '{print \$9}'"
+echo "what is 2+2" | ibrcli chat
 ```
 
 ## Config file
 
-Lives at `~/.ibr/config.json` (override with `IBR_CONFIG_DIR`). Every field is editable via `ibr config` or by editing the JSON directly.
+Lives at `~/.ibr/config.json` (override with `IBR_CONFIG_DIR`). Every field is editable via `ibrcli config` or by editing the JSON directly.
 
 ```jsonc
 {

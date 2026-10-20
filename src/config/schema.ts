@@ -1,5 +1,5 @@
 // IBR cli — config schema & types
-// Every field here is user-editable via `ibr config` (TUI) or by editing
+// Every field here is user-editable via `ibrcli config` (TUI) or by editing
 // ~/.ibr/config.json directly. There are NO built-in providers — only the
 // custom API the user supplies.
 

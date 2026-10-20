@@ -4,14 +4,15 @@
   "description": "IBR cli — minimal AI chat for any OpenAI-compatible API. Works on Termux, Linux, macOS, Windows.",
   "type": "module",
   "bin": {
-    "ibr": "dist/index.js"
+    "ibrcli": "dist/index.js"
   },
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepare": "npm run build"
   },
   "engines": {
     "node": ">=18.0.0"
