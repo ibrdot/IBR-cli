@@ -13,6 +13,7 @@ export function configPath() {
 export function loadConfig() {
     const p = configPath();
     if (!existsSync(p)) {
+        // First run — write the default skeleton so the user can edit it.
         saveConfig(DEFAULT_CONFIG);
         return { ...DEFAULT_CONFIG };
     }
@@ -23,7 +24,7 @@ export function loadConfig() {
     }
     catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
-        throw new Error(`Failed to parse config at ${p}\nReason: ${reason}\nFix with: ibr config`);
+        throw new Error(`Failed to parse config at ${p}\nReason: ${reason}\nFix with: ibrcli config`);
     }
 }
 export function saveConfig(c) {
@@ -33,9 +34,8 @@ export function saveConfig(c) {
         writeFileSync(p, JSON.stringify(c, null, 2) + "\n", { mode: 0o600 });
     }
     catch (err) {
-        // best-effort: warn but don't crash
         const reason = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`ibr: could not save config to ${p}: ${reason}\n`);
+        process.stderr.write(`ibrcli: could not save config to ${p}: ${reason}\n`);
     }
 }
 export function activeModel(c) {
@@ -73,7 +73,7 @@ export function removeModel(c, id) {
  * One-shot setup: set api_url + api_key, and either switch to or create a
  * model preset that sends the given `model` id to the API.
  *
- * Example: ibrcli login https://integrate.api.nvidia.com/v1 nvapi-xxx z-ai/glm-5.3
+ * Example: ibrcli login https://api.openai.com/v1 sk-xxx gpt-4o-mini
  */
 export function login(c, url, key, model) {
     // find a preset with this model id (or matching id), else create one
@@ -84,10 +84,8 @@ export function login(c, url, key, model) {
         existing.model = model;
     }
     else {
-        // use the model id as the preset id, but sanitize
         presetId = model.replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 32) || "user";
         if (c.models.find((m) => m.id === presetId)) {
-            // already exists with same id but different model id — just update
             const m = c.models.find((x) => x.id === presetId);
             m.model = model;
         }
@@ -113,8 +111,12 @@ export function login(c, url, key, model) {
 }
 /**
  * Quick-set a top-level field by dotted path (e.g. "api_key", "gen.temperature").
+ * Special case: `set model <value>` updates the active preset's `model` field.
  */
 export function setField(c, path, value) {
+    if (path === "model") {
+        return setModel(c, value);
+    }
     const next = JSON.parse(JSON.stringify(c));
     const parts = path.split(".");
     let target = next;
@@ -141,4 +143,53 @@ export function setField(c, path, value) {
     }
     target[leaf] = v;
     return next;
+}
+/**
+ * Set the active preset's `model` field. If the active preset is the
+ * default placeholder ("default" with empty model), replace it in-place.
+ */
+export function setModel(c, model) {
+    const next = JSON.parse(JSON.stringify(c));
+    const active = next.models.find((m) => m.id === next.active_model_id) || next.models[0];
+    if (active && active.id === "default" && !active.model) {
+        active.model = model;
+        active.id = model.replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 32) || "default";
+        next.active_model_id = active.id;
+    }
+    else if (active) {
+        active.model = model;
+    }
+    return next;
+}
+/**
+ * Has the user completed first-time setup?
+ * Returns false if api_url, api_key, or the active model's model field is empty.
+ */
+export function isConfigured(c) {
+    if (!c.api_url || !c.api_key)
+        return false;
+    const m = activeModel(c);
+    if (!m.model || m.model.length === 0)
+        return false;
+    return true;
+}
+/**
+ * Mask an API key for display. Shows first 4 + "…" + last 4, or "****" if too short.
+ * NEVER returns the raw key.
+ */
+export function maskApiKey(key) {
+    if (!key)
+        return "(empty)";
+    if (key.length <= 8)
+        return "*".repeat(key.length);
+    return key.slice(0, 4) + "…" + key.slice(-4);
+}
+/**
+ * Sanitize a URL for display — strips any `key=` or `token=` query params
+ * that might contain secrets.
+ */
+export function sanitizeUrl(url) {
+    if (!url)
+        return "(empty)";
+    return url.replace(/([?&])(key|token|api_key|secret)=([^&]+)/gi, "$1$2=***");
 }

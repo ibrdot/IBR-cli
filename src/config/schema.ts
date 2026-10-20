@@ -59,8 +59,11 @@ export const DEFAULT_GEN: GenParams = {
   presence_penalty: 0,
 }
 
+// Provider-agnostic defaults. NO API URL, NO API KEY, NO model preset
+// is shipped — the user must run `ibrcli login <url> <key> [model]` (or
+// `ibrcli set api_url`/`api_key`/`model`) on first launch.
 export const DEFAULT_CONFIG: Config = {
-  api_url: "https://integrate.api.nvidia.com/v1",
+  api_url: "",
   api_key: "",
   api_path: "/chat/completions",
   system_prompt:
@@ -68,19 +71,19 @@ export const DEFAULT_CONFIG: Config = {
     "You can call tools to read/write files, run shell commands, search code, and fetch URLs. " +
     "Be concise. When you take an action, briefly say what you did. " +
     "Use markdown formatting (headings, lists, code blocks) for readability.",
-  context_window: 128000,
+  context_window: 8000,
   gen: { ...DEFAULT_GEN },
   headers: [],
   models: [
     {
-      id: "glm",
-      model: "z-ai/glm-5.3",
-      context_window: 128000,
+      id: "default",
+      model: "",
+      context_window: 8000,
       system_prompt: "",
       gen: { ...DEFAULT_GEN },
     },
   ],
-  active_model_id: "glm",
+  active_model_id: "default",
   request_timeout_ms: 120000,
   stream: true,
   theme: "midnight",

@@ -2,7 +2,7 @@
 
 import * as readline from "node:readline/promises"
 import { stdin, stdout } from "node:process"
-import { activeModel, loadConfig, saveConfig, switchModel, addModel, removeModel } from "./config/store.js"
+import { activeModel, loadConfig, saveConfig, switchModel, addModel, removeModel, sanitizeUrl, isConfigured } from "./config/store.js"
 import type { Config } from "./config/schema.js"
 import { streamChat, type ChatMessage, type ToolCall } from "./api/client.js"
 import { buildOutgoing } from "./context/window.js"
@@ -33,8 +33,10 @@ export async function startChat(): Promise<void> {
     process.stdout.write(COLOR.muted("Run `ibrcli config` to fix.") + "\n")
     process.exit(1)
   }
-  if (!cfg.api_key || cfg.api_key.length === 0) {
-    process.stdout.write(COLOR.warn("No API key set. Run `ibrcli login <api_url> <api_key> <model>` to set in one line.") + "\n")
+  if (!isConfigured(cfg)) {
+    // shouldn't reach here — index.ts guards this — but be defensive
+    process.stdout.write(COLOR.warn("Config incomplete. Run `ibrcli login <url> <key> [model]` to set up.") + "\n")
+    process.exit(1)
   }
 
   printBanner()
@@ -176,8 +178,8 @@ function printHelp(): void {
 
 function printStatus(cfg: Config, usedTokens = 0, budget = 0): void {
   const m = activeModel(cfg)
-  const left = `${COLOR.brand("IBR")} ${COLOR.muted("·")} ${COLOR.brand(m.id)} ${COLOR.muted("(" + m.model + ")")}`
-  const right = usedTokens > 0 ? `${usedTokens}/${budget} tokens` : cfg.api_url
+  const left = `${COLOR.brand("IBR")} ${COLOR.muted("·")} ${COLOR.brand(m.id)} ${COLOR.muted("(" + (m.model || "(unset)") + ")")}`
+  const right = usedTokens > 0 ? `${usedTokens}/${budget} tokens` : sanitizeUrl(cfg.api_url)
   process.stdout.write(statusBar(left, right) + "\n")
 }
 

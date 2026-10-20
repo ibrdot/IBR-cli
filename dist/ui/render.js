@@ -65,7 +65,9 @@ export class Spinner {
             clearInterval(this.timer);
             this.timer = null;
         }
-        if (clear)
+        // only write the clear sequence in TTY mode — in pipes the spaces would
+        // show up as literal output
+        if (clear && isTTY())
             process.stdout.write("\r" + " ".repeat(60) + "\r");
     }
     update(label) {

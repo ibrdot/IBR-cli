@@ -48,11 +48,17 @@ function buildBody(c: Config, m: ModelPreset, messages: ChatMessage[], tools: an
     stream: c.stream,
     temperature: m.gen.temperature,
     top_p: m.gen.top_p,
-    frequency_penalty: m.gen.frequency_penalty,
-    presence_penalty: m.gen.presence_penalty,
   }
+  // max_tokens only if explicitly set
   if (m.gen.max_tokens != null && m.gen.max_tokens > 0) {
     body.max_tokens = m.gen.max_tokens
+  }
+  // penalties only when non-default (some endpoints reject them otherwise)
+  if (m.gen.frequency_penalty && m.gen.frequency_penalty !== 0) {
+    body.frequency_penalty = m.gen.frequency_penalty
+  }
+  if (m.gen.presence_penalty && m.gen.presence_penalty !== 0) {
+    body.presence_penalty = m.gen.presence_penalty
   }
   if (tools && tools.length > 0) {
     body.tools = tools

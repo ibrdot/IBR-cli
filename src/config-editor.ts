@@ -17,7 +17,7 @@ function printMenu(cfg: Config): void {
   process.stdout.write("\r\x1b[K")
   process.stdout.write(COLOR.brand("IBR config") + COLOR.muted(" — edit any field by number  (s=save  q=cancel)") + "\n\n")
   const items: [string, string, string][] = [
-    [" 1", "API URL", cfg.api_url],
+    [" 1", "API URL", maskUrl(cfg.api_url)],
     [" 2", "API Key", mask(cfg.api_key)],
     [" 3", "API path", cfg.api_path],
     [" 4", "System prompt (default)", cfg.system_prompt.slice(0, 60) + (cfg.system_prompt.length > 60 ? "…" : "")],
@@ -42,6 +42,11 @@ function mask(key: string): string {
   if (!key) return "(empty)"
   if (key.length <= 8) return "*".repeat(key.length)
   return key.slice(0, 4) + "…" + key.slice(-4)
+}
+
+function maskUrl(url: string): string {
+  if (!url) return "(empty)"
+  return url.replace(/([?&])(key|token|api_key|secret)=([^&]+)/gi, "$1$2=***")
 }
 
 export async function openConfigEditor(cfg: Config, readLine: ReadLineFn): Promise<void> {
